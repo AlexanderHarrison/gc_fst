@@ -1,7 +1,7 @@
 # gc_fst
 This library extracts and rebuilds Gamecube ISO files.
 
-This is somewhat equivalent to the functionality given by [GCRebuilder](https://github.com/lunarsoap5/gcrebuilder),
+This is almost equivalent to the functionality given by [GCRebuilder](https://github.com/lunarsoap5/gcrebuilder)
 and [gcmod](https://github.com/Addisonbean/gcmod).
 It has much better error messages than either program, fewer bugs, and will work on linux.
 
