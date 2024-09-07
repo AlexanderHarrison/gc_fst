@@ -267,7 +267,6 @@ pub fn read_iso(iso: &[u8]) -> Result<(), ReadISOError> {
     let mut dir_end_indices = Vec::with_capacity(8);
     let mut offset = entry_start_offset;
     let mut entry_index = 1;
-    let mut start = std::u32::MAX;
     while offset < string_table_offset {
         while Some(entry_index) == dir_end_indices.last().copied() {
             // dir has ended
@@ -288,8 +287,6 @@ pub fn read_iso(iso: &[u8]) -> Result<(), ReadISOError> {
         if is_file {
             let file_offset = read_u32(iso, offset+4);
             let file_size = read_u32(iso, offset+8);
-
-            start = start.min(file_offset);
 
             path.push(filename);
             std::fs::write(&path, &iso[file_offset as usize..][..file_size as usize])
