@@ -3,7 +3,7 @@ This library/binary extracts and rebuilds Gamecube ISO filesystems.
 
 This is almost equivalent to the functionality given by [GCRebuilder](https://github.com/lunarsoap5/gcrebuilder)
 and [gcmod](https://github.com/Addisonbean/gcmod).
-It has much better error messages than either program, fewer bugs, and will work on linux.
+It has much better error messages than either program, fewer bugs, and will work on linux, Windows, and probably OSX.
 
 gc_fst currently does not support editing metadata such as banners, game code, etc. but it is planned.
 
