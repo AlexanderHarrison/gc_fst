@@ -7,7 +7,7 @@ description = "Gamecube ISO unpacker and rebuilder."
 readme = "Readme.md"
 license = "MIT OR Apache-2.0"
 keywords = ["cli", "utility", "encoding", "game", "linux"]
-categories = ["Filesystem", "command-line-utilities"]
+categories = ["filesystem", "command-line-utilities"]
 repository = "https://github.com/AlexanderHarrison/gc_fst"
 documentation = "https://docs.rs/gc_fst/"
 
