@@ -3,6 +3,12 @@ name = "gc_fst"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "Compresses and decompresses between the slp and slpz Slippi replay formats."
+readme = "Readme.md"
+license = "MIT OR Apache-2.0"
+keywords = ["compression", "cli", "utility", "encoding"]
+categories = ["compression", "command-line-utilities"]
+repository = "https://github.com/AlexanderHarrison/slpz"
+documentation = "https://docs.rs/gc_fst/"
 
 [dependencies]

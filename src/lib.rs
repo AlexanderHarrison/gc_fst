@@ -16,7 +16,7 @@ pub enum WriteISOError {
     ReadDirError(std::io::Error),
 }
 
-const ROM_SIZE: u32 = 0x57058000;
+pub const ROM_SIZE: u32 = 0x57058000;
 
 pub fn write_iso(root: &std::path::Path) -> Result<Vec<u8>, WriteISOError> {
     const SEGMENT_ALIGNMENT: u32 = 8;
