@@ -10,3 +10,11 @@ keywords = ["cli", "utility", "encoding", "game", "linux"]
 categories = ["Filesystem", "command-line-utilities"]
 repository = "https://github.com/AlexanderHarrison/gc_fst"
 documentation = "https://docs.rs/gc_fst/"
+
+[lib]
+name = "gc_fst"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gc_fst"
+path = "src/main.rs"
