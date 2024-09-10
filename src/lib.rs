@@ -16,7 +16,112 @@ pub enum WriteISOError {
     ReadDirError(std::io::Error),
 }
 
+#[derive(Debug)]
+#[cfg(feature = "png")]
+pub enum FromPngError {
+    DecodeError(lodepng::Error),
+}
+
 pub const ROM_SIZE: u32 = 0x57058000;
+
+#[derive(Clone, Debug)]
+pub struct RGB5A1Image(pub Box<[u8; 0x1800]>);
+
+impl RGB5A1Image {
+    /// Convert from an rgba8 image. 
+    ///
+    /// Expects a 96*32 image in rows of pixels.
+    /// 
+    /// Pixels with an alpha greater or equal to 128 will be converted to fully transparent pixels in the file.
+    /// Pixels with lesser alpha values will be turned opaque.
+    pub fn from_rgba8(data: [[u8; 4]; 96*32]) -> Self {
+        let mut out = Box::new([0u8; 0x1800]);
+
+        for i in 0..(96*32) {
+            let [r, g, b, a] = data[i];
+
+            let new_r = r >> 3;
+            let new_g = g >> 3;
+            let new_b = b >> 3;
+            let new_a = a >> 7;
+
+            let b1 = (new_r << 3) ^ (new_g >> 2);
+            let b2 = (new_g << 5) ^ (new_b << 1) ^ new_a;
+
+            out[i*2] = b1;
+            out[i*2+1] = b2;
+        }
+
+        Self(out)
+    }
+}
+
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum GameRegion { UsOrJp, Eu, }
+
+#[derive(Copy, Clone, Debug)]
+pub struct GameInfo<'a> {
+    region: GameRegion,
+
+    /// Must be less than 0x20 bytes.
+    game_title: &'a str,
+
+    /// Must be less than 0x20 bytes.
+    developer_title: &'a str,
+
+    /// Must be less than 0x40 bytes.
+    full_game_title: &'a str,
+
+    /// Must be less than 0x40 bytes.
+    full_developer_title: &'a str,
+
+    /// Must be less than 0x80 bytes.
+    game_description: &'a str,
+
+    banner: &'a RGB5A1Image,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum CreateOpeningBnrError {
+    GameTitleTooLong,
+    DevTitleTooLong,
+    FullGameTitleTooLong,
+    FullDevTitleTooLong,
+    GameDescTooLong,
+}
+
+impl<'a> GameInfo<'a> {
+    pub fn verify(&self) -> Result<(), CreateOpeningBnrError> {
+        if self.game_title.len()                >= 0x20 { return Err(CreateOpeningBnrError::GameTitleTooLong)     }
+        else if self.developer_title.len()      >= 0x20 { return Err(CreateOpeningBnrError::DevTitleTooLong)      }
+        else if self.full_game_title.len()      >= 0x40 { return Err(CreateOpeningBnrError::FullGameTitleTooLong) }
+        else if self.full_developer_title.len() >= 0x40 { return Err(CreateOpeningBnrError::FullDevTitleTooLong)  }
+        else if self.game_description.len()     >= 0x80 { return Err(CreateOpeningBnrError::GameDescTooLong)      }
+
+        Ok(())
+    }
+}
+
+/// Converts fields into an 'opening.bnr' file.
+pub fn create_opening_bnr(info: GameInfo) -> Result<Box<[u8; 0x1960]>, CreateOpeningBnrError> {
+    info.verify()?;
+
+    let mut file = Box::new([0u8; 0x1960]);
+    let region = match info.region {
+        GameRegion::UsOrJp => b"BNR1",
+        GameRegion::Eu => b"BNR2",
+    };
+    file[0..4].copy_from_slice(region);
+    file[0x20..][..0x1800].copy_from_slice(&*info.banner.0);
+    file[0x1820..][..0x20].copy_from_slice(info.game_title.as_bytes());
+    file[0x1840..][..0x20].copy_from_slice(info.developer_title.as_bytes());
+    file[0x1860..][..0x40].copy_from_slice(info.full_game_title.as_bytes());
+    file[0x18A0..][..0x40].copy_from_slice(info.full_developer_title.as_bytes());
+    file[0x18E0..][..0x80].copy_from_slice(info.game_description.as_bytes());
+
+    Ok(file)
+}
 
 pub fn write_iso(root: &std::path::Path) -> Result<Vec<u8>, WriteISOError> {
     const SEGMENT_ALIGNMENT: u32 = 8;
