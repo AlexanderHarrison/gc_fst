@@ -34,22 +34,38 @@ impl RGB5A1Image {
     /// 
     /// Pixels with an alpha greater or equal to 128 will be converted to fully transparent pixels in the file.
     /// Pixels with lesser alpha values will be turned opaque.
-    pub fn from_rgba8(data: [[u8; 4]; 96*32]) -> Self {
+    pub fn from_rgba8(data: &[[u8; 4]; 96*32]) -> Self {
         let mut out = Box::new([0u8; 0x1800]);
 
-        for i in 0..(96*32) {
-            let [r, g, b, a] = data[i];
+        const TILES_X: usize = 24;
+        const TILES_Y: usize = 8;
 
-            let new_r = r >> 3;
-            let new_g = g >> 3;
-            let new_b = b >> 3;
-            let new_a = a >> 7;
+        let mut out_i = 0;
+        for tile_y in 0..TILES_Y {
+            for tile_x in 0..TILES_X {
+                for ty in 0..4 {
+                    for tx in 0..4 {
+                        let y = tile_y*4 + ty;
+                        let x = tile_x*4 + tx;
+                        let in_i = x + y*96;
 
-            let b1 = (new_r << 3) ^ (new_g >> 2);
-            let b2 = (new_g << 5) ^ (new_b << 1) ^ new_a;
+                        let [r, g, b, a] = data[in_i];
 
-            out[i*2] = b1;
-            out[i*2+1] = b2;
+                        let new_r = r >> 3;
+                        let new_g = g >> 3;
+                        let new_b = b >> 3;
+                        let new_a = a >> 7;
+
+                        let b1 = (new_a << 7) ^ (new_r << 2) ^ (new_g >> 3);
+                        let b2 = (new_g << 5) ^ new_b;
+
+                        out[out_i] = b1;
+                        out[out_i+1] = b2;
+
+                        out_i += 2;
+                    }
+                }
+            }
         }
 
         Self(out)
@@ -62,24 +78,24 @@ pub enum GameRegion { UsOrJp, Eu, }
 
 #[derive(Copy, Clone, Debug)]
 pub struct GameInfo<'a> {
-    region: GameRegion,
+    pub region: GameRegion,
 
     /// Must be less than 0x20 bytes.
-    game_title: &'a str,
+    pub game_title: &'a str,
 
     /// Must be less than 0x20 bytes.
-    developer_title: &'a str,
+    pub developer_title: &'a str,
 
     /// Must be less than 0x40 bytes.
-    full_game_title: &'a str,
+    pub full_game_title: &'a str,
 
     /// Must be less than 0x40 bytes.
-    full_developer_title: &'a str,
+    pub full_developer_title: &'a str,
 
     /// Must be less than 0x80 bytes.
-    game_description: &'a str,
+    pub game_description: &'a str,
 
-    banner: &'a RGB5A1Image,
+    pub banner: &'a RGB5A1Image,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -114,11 +130,11 @@ pub fn create_opening_bnr(info: GameInfo) -> Result<Box<[u8; 0x1960]>, CreateOpe
     };
     file[0..4].copy_from_slice(region);
     file[0x20..][..0x1800].copy_from_slice(&*info.banner.0);
-    file[0x1820..][..0x20].copy_from_slice(info.game_title.as_bytes());
-    file[0x1840..][..0x20].copy_from_slice(info.developer_title.as_bytes());
-    file[0x1860..][..0x40].copy_from_slice(info.full_game_title.as_bytes());
-    file[0x18A0..][..0x40].copy_from_slice(info.full_developer_title.as_bytes());
-    file[0x18E0..][..0x80].copy_from_slice(info.game_description.as_bytes());
+    file[0x1820..][..info.game_title.len()].copy_from_slice(info.game_title.as_bytes());
+    file[0x1840..][..info.developer_title.len()].copy_from_slice(info.developer_title.as_bytes());
+    file[0x1860..][..info.full_game_title.len()].copy_from_slice(info.full_game_title.as_bytes());
+    file[0x18A0..][..info.full_developer_title.len()].copy_from_slice(info.full_developer_title.as_bytes());
+    file[0x18E0..][..info.game_description.len()].copy_from_slice(info.game_description.as_bytes());
 
     Ok(file)
 }

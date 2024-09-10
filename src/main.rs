@@ -3,7 +3,7 @@ use gc_fst::*;
 const HELP: &'static str = 
 "Usage: gc_fst extract <iso path>
        gc_fst rebuild <root path> [iso path]
-       gc_fst set-ID <ISO.hdr path | iso path> <game ID>";
+       gc_fst set-header <ISO.hdr path | iso path> <game ID> [game title]";
 
 fn usage() -> ! {
     eprintln!("{}", HELP);
@@ -13,7 +13,7 @@ fn usage() -> ! {
 fn main() {
     let args = std::env::args().collect::<Vec<_>>();
     match args.get(1).map(|s| s.as_str()) {
-        Some("set-ID") => {
+        Some("set-header") => {
             let path = match args.get(2).map(|s| s.as_str()) {
                 Some(p) => p,
                 None => usage(),
@@ -40,14 +40,33 @@ fn main() {
                 std::process::exit(1);
             }
 
-            use std::io::Write;
-            match f.write_all(game_id.as_bytes()) {
-                Ok(_) => (),
-                Err(e) => {
-                    eprintln!("Error: Could not write file: {}", e);
+            use std::io::{Seek, Write};
+            if let Err(e) = f.write_all(game_id.as_bytes()) {
+                eprintln!("Error: Could not write file: {}", e);
+                std::process::exit(1);
+            }
+
+            match args.get(4).map(|s| s.as_str()) {
+                Some(title) if title.len() >= 0x20 => {
+                    eprintln!("Error: game title is too long");
                     std::process::exit(1);
                 }
-            }
+                Some(title) => {
+                    let mut bytes = [0u8; 0x20];
+                    bytes[0..title.len()].copy_from_slice(title.as_bytes());
+
+                    if let Err(e) = f.seek(std::io::SeekFrom::Start(0x20)) {
+                        eprintln!("Error: Could not seek file: {}", e);
+                        std::process::exit(1);
+                    }
+
+                    if let Err(e) = f.write_all(&bytes) {
+                        eprintln!("Error: Could not write file: {}", e);
+                        std::process::exit(1);
+                    }
+                },
+                None => (),
+            };
         }
         Some("extract") => {
             let iso_path = match args.get(2).map(|s| s.as_str()) {

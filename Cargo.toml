@@ -18,3 +18,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "gc_fst"
 path = "src/main.rs"
+
+[dev-dependencies]
+lodepng = "3.10"
