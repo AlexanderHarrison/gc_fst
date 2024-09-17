@@ -5,11 +5,17 @@ This is almost equivalent to the functionality given by [GCRebuilder](https://gi
 and [gcmod](https://github.com/Addisonbean/gcmod).
 It has much better error messages than either program, fewer bugs, and will work on linux, Windows, and probably OSX.
 
-gc_fst currently does not support editing metadata such as banners, game code, etc. but it is planned.
-
 ```
 Usage: gc_fst extract <iso path>
        gc_fst rebuild <root path> [iso path]
+       gc_fst set-header <ISO.hdr path | iso path> <game ID> [game title]
 ```
 
-Note that gc_fst always rebuilds the table of contents when rebuilding, and will not emit a Game.toc file when extracting.
+## Limitations
+
+The `gc_fst` binary does not support editing metadata (banner image, game name, description, etc.) contained in [opening.bnr](https://hitmen.c02.at/files/yagcd/yagcd/chap14.html#sec14.1).
+You can, however, use the library to create a new `opening.bnr` file.
+See how [in this example](examples/create_opening_bnr.rs).
+
+Note that `gc_fst` will always reconstruct the table of contents when rebuilding the iso.
+Likewise, it will not emit a `Game.toc` file when extracting.
