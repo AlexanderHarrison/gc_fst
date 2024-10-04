@@ -1,4 +1,10 @@
 const HEADER_INFO_OFFSET: u32 = 0x420;
+const FILE_CONTENTS_ALIGNMENT: u32 = 15; // 32k
+const SEGMENT_ALIGNMENT: u32 = 8;
+
+pub const ROM_SIZE: u32 = 0x57058000;
+
+pub mod fs;
 
 #[derive(Debug)]
 pub enum ReadISOError {
@@ -17,12 +23,25 @@ pub enum WriteISOError {
 }
 
 #[derive(Debug)]
+pub enum OperateISOError {
+    IOError(std::io::Error),
+    FileInsertionReplicatesFolder(std::path::PathBuf),
+    InvalidISOPath(std::path::PathBuf),
+    InvalidFSPath(std::path::PathBuf),
+    InvalidISO,
+    TOCTooLarge,
+    ISOTooLarge,
+}
+
+impl From<std::io::Error> for OperateISOError {
+    fn from(e: std::io::Error) -> Self { OperateISOError::IOError(e) }
+}
+
+#[derive(Debug)]
 #[cfg(feature = "png")]
 pub enum FromPngError {
     DecodeError(lodepng::Error),
 }
-
-pub const ROM_SIZE: u32 = 0x57058000;
 
 #[derive(Clone, Debug)]
 pub struct RGB5A1Image(pub Box<[u8; 0x1800]>);
@@ -140,8 +159,6 @@ pub fn create_opening_bnr(info: GameInfo) -> Result<Box<[u8; 0x1960]>, CreateOpe
 }
 
 pub fn write_iso(root: &std::path::Path) -> Result<Vec<u8>, WriteISOError> {
-    const SEGMENT_ALIGNMENT: u32 = 8;
-
     let mut iso = Vec::with_capacity(ROM_SIZE as usize);
     let mut path = root.to_path_buf();
     
@@ -237,7 +254,6 @@ fn write_dir(
     string_start: u32,
     string_offset: &mut u32, 
 ) -> Result<(), WriteISOError> {
-    const FILE_CONTENTS_ALIGNMENT: u32 = 15; // 32k
     let mut path = path.to_path_buf();
 
     struct Entry {
@@ -273,6 +289,16 @@ fn write_dir(
     }
 
     entries.sort_by(|a, b| cmp_case_insensitive(&a.name, &b.name));
+
+    // TEMP - put TM and codes.gct at end so rsync doesn't have to change as much:w
+    if let Some(i) = entries.iter().position(|e| e.name == "TM") {
+        let e = entries.remove(i);
+        entries.push(e);
+    }
+    if let Some(i) = entries.iter().position(|e| e.name == "codes.gct") {
+        let e = entries.remove(i);
+        entries.push(e);
+    }
 
     for Entry { name, size } in entries {
         if let Some(size) = size {
@@ -388,6 +414,7 @@ pub fn read_iso(iso: &[u8]) -> Result<(), ReadISOError> {
     let mut dir_end_indices = Vec::with_capacity(8);
     let mut offset = entry_start_offset;
     let mut entry_index = 1;
+
     while offset < string_table_offset {
         while Some(entry_index) == dir_end_indices.last().copied() {
             // dir has ended
@@ -424,7 +451,7 @@ pub fn read_iso(iso: &[u8]) -> Result<(), ReadISOError> {
         offset += 0xC;
         entry_index += 1;
     }
-
+    
     // write special (&&systemdata) files ------------------------------------
 
     path.clear();
@@ -457,6 +484,465 @@ pub fn read_iso(iso: &[u8]) -> Result<(), ReadISOError> {
     std::fs::write(&path, &iso[dol_offset as usize..dol_end as usize])
         .map_err(|e| ReadISOError::WriteFileError(e))?;
     path.pop();
+
+    // We don't write Game.toc. It's pretty much useless.
+    // The point of exporting the fs is to modify, add, and remove files,
+    // which means we have to recreate the table of contents anyways when rebuilding the iso.
+
+    Ok(())
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum IsoOp<'a> {
+    Insert { iso_path: &'a std::path::Path, input_path: &'a std::path::Path },
+    Delete { iso_path: &'a std::path::Path },
+}
+
+#[derive(Copy, Clone, Debug)]
+enum FsEntry<'a> {
+    PushDir { name: &'a str },
+    PopDir,
+    File {
+        name: &'a str,
+        offset: u32,
+        size: u32,
+    }
+}
+
+fn find_dir(fs: &[FsEntry], entry: &std::ffi::OsStr) -> Option<usize> {
+    let mut i = 0;
+    while i < fs.len() {
+        match fs[i] {
+            FsEntry::PushDir { name } if name == entry => return Some(i),
+            FsEntry::PushDir { .. } => {
+                let mut depth = 1;
+
+                i += 1;
+                // skip folder
+                while i < fs.len() {
+                    match &fs[i] {
+                        FsEntry::File { .. } => {},
+                        FsEntry::PushDir { .. } => depth += 1,
+                        FsEntry::PopDir { .. } => depth -= 1,
+                    }
+                    i += 1;
+
+                    if depth == 0 { break }
+                }
+            }
+            _ => i += 1,
+        }
+    }
+
+    None
+}
+
+// returns index to insert file at
+fn mkdir_all<'a>(fs: &mut Vec<FsEntry<'a>>, dir_path: &'a std::path::Path) -> Result<usize, OperateISOError> {
+    let mut folder_insert_idx = 0;
+
+    let mut components = dir_path.components();
+    while let Some(component) = components.next() {
+        let dir_name = match component {
+            std::path::Component::Normal(dir) => dir,
+            std::path::Component::RootDir => continue,
+            _ => return Err(OperateISOError::InvalidISOPath(dir_path.to_path_buf())),
+        };
+
+        if let Some(i) = find_dir(&fs[folder_insert_idx..], dir_name) {
+            folder_insert_idx += i + 1;
+        } else {
+            let name = dir_name.to_str().ok_or_else(|| OperateISOError::InvalidISOPath(std::path::Path::new(dir_name).to_path_buf()))?;
+            fs.insert(folder_insert_idx, FsEntry::PushDir { name });
+            fs.insert(folder_insert_idx+1, FsEntry::PopDir);
+            folder_insert_idx += 1;
+            break;
+        }
+    }
+
+    for component in components {
+        let dir_name = match component {
+            std::path::Component::Normal(dir) => dir,
+            std::path::Component::RootDir => continue,
+            _ => return Err(OperateISOError::InvalidISOPath(dir_path.to_path_buf())),
+        };
+
+        let name = dir_name.to_str().ok_or_else(|| OperateISOError::InvalidISOPath(std::path::Path::new(dir_name).to_path_buf()))?;
+        fs.insert(folder_insert_idx, FsEntry::PushDir { name });
+        fs.insert(folder_insert_idx+1, FsEntry::PopDir);
+        folder_insert_idx += 1;
+    }
+
+    Ok(folder_insert_idx)
+}
+
+/// Tries to do as little IO as possible. 
+// Replace and Read ops work with &&systemdata files.
+pub fn operate_on_iso(iso_path: &std::path::Path, ops: &[IsoOp]) -> Result<(), OperateISOError> {
+    use std::io::{Read, Write, Seek, SeekFrom};
+
+    //if ops.len() == 0 { return Ok(()) }
+    let iso_meta = iso_path.metadata()?;
+
+    println!("len {}", iso_meta.len());
+    if iso_meta.len() != ROM_SIZE as _ { return Err(OperateISOError::InvalidISO); }
+
+    let mut iso_file_deletions = Vec::new();
+    let mut iso_file_insertions = Vec::new();
+
+    for op in ops {
+        match op {
+            IsoOp::Insert { iso_path, input_path } => {
+                iso_file_deletions.push(*iso_path);
+                iso_file_insertions.push((iso_path, input_path));
+            },
+            IsoOp::Delete { iso_path } => {
+                iso_file_deletions.push(*iso_path);
+            }
+        }
+    }
+
+    let mut iso = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .open(iso_path)?;
+
+    let mut u32_buf = [0u8; 4];
+
+    // read header ---------------------------------------------------------
+
+    iso.seek(SeekFrom::Start((HEADER_INFO_OFFSET+4) as _))?;
+    iso.read_exact(&mut u32_buf)?;
+    let fst_offset = u32::from_be_bytes(u32_buf);
+
+    iso.seek(SeekFrom::Start((fst_offset + 8) as _))?;
+    iso.read_exact(&mut u32_buf)?;
+    let entry_count = u32::from_be_bytes(u32_buf);
+
+    let string_table_offset = fst_offset + entry_count * 0xC;
+    let entry_start_offset = fst_offset + 0xC;
+
+    // read iso fs ------------------------------------------------------------
+
+    let string_table_offset_in_buf = string_table_offset - entry_start_offset; 
+    iso.seek(SeekFrom::Start(entry_start_offset as _))?;
+    let mut buf = vec![0u8; (string_table_offset_in_buf + 16*entry_count) as usize];
+    iso.read_exact(&mut buf)?;
+
+    let mut dir_end_indices = Vec::with_capacity(8);
+    let mut offset = 0;
+    let mut entry_index = 1;
+
+    let mut string_table_end = 0;
+    let mut fs = Vec::new();
+
+    //println!("IN {}:", entry_count);
+
+    while offset < string_table_offset_in_buf {
+        while Some(entry_index) == dir_end_indices.last().copied() {
+            // dir has ended
+            dir_end_indices.pop();
+            fs.push(FsEntry::PopDir);
+        }
+
+        let is_file = buf[offset as usize] == 0;
+
+        let mut name_offset_buf = [0; 4];
+        name_offset_buf[1] = buf[offset as usize+1];
+        name_offset_buf[2] = buf[offset as usize+2];
+        name_offset_buf[3] = buf[offset as usize+3];
+        let name_offset = u32::from_be_bytes(name_offset_buf);
+        let name = read_filename(&buf, string_table_offset_in_buf + name_offset)
+            .ok_or(OperateISOError::InvalidISO)?;
+
+        let string_len = name.len() as u32 + 1;
+        string_table_end = string_table_end.max(name_offset+string_len);
+
+        if is_file {
+            let file_offset = read_u32(&buf, offset+4);
+            let file_size = read_u32(&buf, offset+8);
+
+            fs.push(FsEntry::File { name, offset: file_offset, size: file_size });
+            //println!("f: {} {} {}", 
+            //    name_offset,
+            //    file_offset,
+            //    file_size
+            //);
+        } else {
+            //let parent_idx = read_u32(&buf, offset+4); // unused
+            let next_idx = read_u32(&buf, offset+8);
+            dir_end_indices.push(next_idx);
+            fs.push(FsEntry::PushDir { name });
+            //println!("d: {} {} {}", 
+            //    name_offset,
+            //    parent_idx,
+            //    next_idx
+            //);
+        }
+
+        offset += 0xC;
+        entry_index += 1;
+    }
+
+    // operate on fs -----------------------------------------------------------
+
+    let mut data_start = u32::MAX;
+    let mut data_end = 0;
+
+    // deletions
+
+    let mut i = 0;
+    let mut path = std::path::PathBuf::with_capacity(32);
+
+    while i < fs.len() {
+        match fs[i] {
+            FsEntry::File { name, size, offset } => {
+                path.push(name);
+
+                let mut kept = true;
+                let mut d = 0;
+                while d < iso_file_deletions.len() {
+                    if path == iso_file_deletions[d] {
+                        kept = false;
+                        iso_file_deletions.remove(d);
+                        break;
+                    }
+
+                    d += 1;
+                }
+
+                if kept { 
+                    data_start = data_start.min(offset);
+                    data_end = data_end.max(size+offset);
+                    i += 1; 
+                } else {
+                    fs.remove(i);
+                }
+
+                path.pop();
+            }
+            FsEntry::PushDir { name } => {
+                path.push(name);
+                i += 1;
+            }
+            FsEntry::PopDir => {
+                path.pop();
+                i += 1;
+            }
+        }
+    }
+
+    // remove empty directories
+
+    let mut i = 0;
+    while i < fs.len() {
+        if matches!(fs[i], FsEntry::PushDir { .. }) && matches!(fs[i+1], FsEntry::PopDir) {
+            fs.splice(i..i+2, []);
+            i = i.saturating_sub(1);
+        } else {
+            i += 1;
+        }
+    }
+
+    // find free space 
+
+    let mut used: Vec<std::ops::Range<u32>> = Vec::with_capacity(entry_count as usize);
+    for e in fs.iter() {
+        match *e {
+            FsEntry::File { offset, size, .. } => used.push(offset..(offset+size)),
+            _ => continue,
+        };
+    }
+    used.sort_unstable_by_key(|r| r.start);
+    let mut free_space = used.windows(2)
+        .filter_map(|r| {
+            let a = r[0].clone();
+            let b = r[1].clone();
+            let new_start = align(a.end, FILE_CONTENTS_ALIGNMENT);
+            if new_start >= b.start { None }
+            else { Some(new_start..b.start) }
+        }).collect::<Vec<_>>();
+
+    let data_end_start = align(data_end, FILE_CONTENTS_ALIGNMENT);
+    if data_end_start < ROM_SIZE { free_space.push(data_end_start..ROM_SIZE) }
+
+    // insertions
+
+    let mut write_locs = Vec::with_capacity(iso_file_insertions.len());
+
+    for (iso_path, fs_path) in iso_file_insertions.iter() {
+        let insert_idx = match iso_path.ancestors().nth(1) {
+            Some(dir_path) => mkdir_all(&mut fs, dir_path)?,
+            None => 0,
+        };
+
+        let file_name = iso_path.file_name()
+            .and_then(|os_str| os_str.to_str())
+            .ok_or_else(|| OperateISOError::InvalidISOPath(iso_path.to_path_buf()))?;
+
+        let meta = fs_path.metadata()?;
+        if !meta.is_file() { return Err(OperateISOError::InvalidFSPath(fs_path.to_path_buf())); }
+        let size = meta.len() as u32;
+
+        let mut offset = None;
+        for free in free_space.iter_mut() {
+            let free_size = free.end.saturating_sub(free.start);
+            if free_size >= size {
+                offset = Some(free.start);
+                free.start = align(free.start+size, FILE_CONTENTS_ALIGNMENT);
+                break;
+            }
+        }
+
+        let offset = match offset {
+            Some(o) => o,
+            None => return Err(OperateISOError::ISOTooLarge),
+        };
+
+        write_locs.push(offset);
+        fs.insert(insert_idx as usize, FsEntry::File { 
+            name: file_name,
+            size,
+            offset,
+        });
+    }
+
+    // new fs was created and is valid, start writing ----------------------------
+
+    // write inserted files
+
+    for (offset, (_, fs_path)) in write_locs.into_iter().zip(iso_file_insertions) {
+        iso.seek(SeekFrom::Start(offset as _))?;
+
+        let mut file = std::fs::File::options()
+            .read(true)
+            .open(fs_path)?;
+
+        std::io::copy(&mut file, &mut iso)?;
+    }
+
+    // TODO: sort fst
+
+    // write table of contents
+
+    let entry_count = fs.iter()
+        .filter(|e| matches!(e, FsEntry::File { .. } | FsEntry::PushDir { .. }))
+        .count();
+
+    let mut toc_bytes = vec![0u8; (entry_count + 1) * 0xC];
+    toc_bytes.reserve(entry_count * 16);
+    let string_start = toc_bytes.len() as u32;
+
+    let mut i = 1u32;
+    let mut dir_start_indices = dir_end_indices;
+    dir_start_indices.clear();
+    dir_start_indices.push(0u32);
+
+    for entry in fs.iter() {
+        match entry {
+            FsEntry::File { name, size, offset } => {
+                let entry_offset = (i * 0xC) as usize;
+                let string_i = toc_bytes.len() as u32 - string_start;
+                toc_bytes[entry_offset+0..][..4].copy_from_slice(&string_i.to_be_bytes());
+                toc_bytes[entry_offset+4..][..4].copy_from_slice(&offset.to_be_bytes());
+                toc_bytes[entry_offset+8..][..4].copy_from_slice(&size.to_be_bytes());
+
+                toc_bytes.extend_from_slice(name.as_bytes());
+                toc_bytes.push(0);
+                i += 1;
+            },
+            FsEntry::PushDir { name } => {
+                let parent_idx = *dir_start_indices.last().unwrap();
+                dir_start_indices.push(i);
+
+                let entry_offset = (i * 0xC) as usize;
+                let string_i = toc_bytes.len() as u32 - string_start;
+                toc_bytes[entry_offset+0..][..4].copy_from_slice(&string_i.to_be_bytes());
+                toc_bytes[entry_offset+0] = 1; // directory flag
+                toc_bytes[entry_offset+4..][..4].copy_from_slice(&parent_idx.to_be_bytes());
+                // next_idx written later
+
+                toc_bytes.extend_from_slice(name.as_bytes());
+                toc_bytes.push(0);
+                i += 1;
+            }
+            FsEntry::PopDir => {
+                let dir_idx = dir_start_indices.pop().unwrap();
+                let next_idx = i;
+                toc_bytes[(dir_idx*0xC+8) as usize..][..4].copy_from_slice(&next_idx.to_be_bytes());
+            }
+        }
+    }
+
+    toc_bytes[0] = 1;
+    toc_bytes[8..12].copy_from_slice(&(entry_count as u32 + 1).to_be_bytes());
+
+    //println!("OUT {}:", entry_count+1);
+    //for i in 0..(entry_count+1) {
+    //    let d = &toc_bytes[(i*0xC)..][..0xC];
+    //    if d[0] == 0 {
+    //        println!("f: {} {} {}", 
+    //            u32::from_be_bytes(d[0..][..4].try_into().unwrap()),
+    //            u32::from_be_bytes(d[4..][..4].try_into().unwrap()),
+    //            u32::from_be_bytes(d[8..][..4].try_into().unwrap()),
+    //        )
+    //    } else {
+    //        let w = [0, d[1], d[2], d[3]];
+    //        println!("d: {} {} {}", 
+    //            u32::from_be_bytes(w.try_into().unwrap()),
+    //            u32::from_be_bytes(d[4..][..4].try_into().unwrap()),
+    //            u32::from_be_bytes(d[8..][..4].try_into().unwrap()),
+    //        )
+    //    }
+    //}
+
+    if toc_bytes.len() as u32 > data_start - fst_offset {
+        return Err(OperateISOError::TOCTooLarge);
+    }
+
+    let fs_size = toc_bytes.len() as u32;
+
+    let mut buf = [0u8; 8];
+    buf[0..4].copy_from_slice(&fs_size.to_be_bytes());
+    buf[4..8].copy_from_slice(&fs_size.to_be_bytes());
+    iso.seek(SeekFrom::Start((HEADER_INFO_OFFSET+8) as _))?;
+    iso.write_all(&buf)?;
+
+    iso.seek(SeekFrom::Start(fst_offset as _))?;
+    iso.write_all(toc_bytes.as_slice())?;
+
+    // write special (&&systemdata) files ------------------------------------
+
+    //path.clear();
+    //path.push("./root");
+    //path.push("&&systemdata");
+    //std::fs::create_dir_all(&path).map_err(|e| ReadISOError::CreateDirError(e))?;
+
+    //path.push("ISO.hdr");
+    //std::fs::write(&path, &iso[0..0x2440])
+    //    .map_err(|e| ReadISOError::WriteFileError(e))?;
+    //path.pop();
+
+    //path.push("AppLoader.ldr");
+    //let apploader_code_size = read_u32(iso, 0x2454);
+    //let apploader_trailer_size = read_u32(iso, 0x2458);
+    //let apploader_total_size = align(apploader_code_size + apploader_trailer_size, 5);
+    //let apploader_end = 0x2440 + apploader_total_size;
+    //std::fs::write(&path, &iso[0x2440..apploader_end as usize])
+    //    .map_err(|e| ReadISOError::WriteFileError(e))?;
+    //path.pop();
+
+    //path.push("Start.dol");
+    //let dol_offset = read_u32(iso, HEADER_INFO_OFFSET);
+    //let dol_size = (0..18).map(|i| {
+    //    let segment_offset = read_u32(iso, dol_offset+i*4);
+    //    let segment_size = read_u32(iso, dol_offset + 0x90 + i*4);
+    //    segment_offset+segment_size
+    //}).max().unwrap();
+    //let dol_end = dol_offset + dol_size;
+    //std::fs::write(&path, &iso[dol_offset as usize..dol_end as usize])
+    //    .map_err(|e| ReadISOError::WriteFileError(e))?;
+    //path.pop();
 
     // We don't write Game.toc. It's pretty much useless.
     // The point of exporting the fs is to modify, add, and remove files,
