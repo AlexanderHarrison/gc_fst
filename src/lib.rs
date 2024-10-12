@@ -6,8 +6,6 @@ pub const ROM_SIZE: u32 = 0x57058000;
 
 use std::path::{Path, PathBuf};
 
-pub mod fs;
-
 #[derive(Debug)]
 pub enum ReadISOError {
     InvalidISO,
@@ -35,8 +33,19 @@ pub enum OperateISOError {
     ISOTooLarge,
 }
 
+#[derive(Debug)]
+pub enum ReadISOFilesError {
+    IOError(std::io::Error),
+    InvalidISO,
+    InvalidFSPath(PathBuf),
+}
+
 impl From<std::io::Error> for OperateISOError {
     fn from(e: std::io::Error) -> Self { OperateISOError::IOError(e) }
+}
+
+impl From<std::io::Error> for ReadISOFilesError {
+    fn from(e: std::io::Error) -> Self { ReadISOFilesError::IOError(e) }
 }
 
 #[derive(Debug)]
@@ -566,6 +575,163 @@ fn mkdir_all<'a>(fs: &mut Vec<FsEntry<'a>>, dir_path: &'a Path) -> Result<usize,
     }
 
     Ok(folder_insert_idx)
+}
+
+struct FilePortion<'a> {
+    iso: &'a mut std::fs::File,
+    size: usize,
+}
+
+impl<'a> std::io::Read for FilePortion<'a> {
+    fn read(&mut self, mut buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.size == 0 { return Ok(0); }
+
+        let buf_len = buf.len();
+        if buf_len >= self.size {
+            buf = &mut buf[..self.size];
+        }
+
+        let n = self.iso.read(buf)?;
+        self.size -= n;
+        Ok(n)
+    }
+}
+
+pub fn read_iso_files(iso_path: &Path, files: &[(&Path, &Path)]) -> Result<(), ReadISOFilesError> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut iso = std::fs::File::options()
+        .read(true)
+        .open(iso_path)?;
+
+    // read header ---------------------------------------------------------
+
+    let mut buf = [0u8; 12];
+    iso.seek(SeekFrom::Start(HEADER_INFO_OFFSET as _))?;
+    iso.read_exact(&mut buf)?;
+    let dol_offset = u32::from_be_bytes(buf[0..4].try_into().unwrap());
+    let fst_offset = u32::from_be_bytes(buf[4..8].try_into().unwrap());
+    let fs_size = u32::from_be_bytes(buf[8..12].try_into().unwrap());
+
+    let mut u32_buf = [0u8; 4];
+    iso.seek(SeekFrom::Start((fst_offset + 8) as _))?;
+    iso.read_exact(&mut u32_buf)?;
+    let entry_count = u32::from_be_bytes(u32_buf);
+
+    let string_table_offset = fst_offset + entry_count * 0xC;
+    let entry_start_offset = fst_offset + 0xC;
+
+    // read special files ---------------------------------------------------
+
+    for (iso_file_path, out_path) in files.iter() {
+        if *iso_file_path == Path::new("ISO.hdr") {
+            let mut f = std::fs::File::options()
+                .create(true)
+                .write(true)
+                .open(out_path)?;
+            iso.seek(SeekFrom::Start(0))?;
+            let mut portion = FilePortion { iso: &mut iso, size: 0x2440 };
+            std::io::copy(&mut portion, &mut f)?;
+        }
+
+        if *iso_file_path == Path::new("AppLoader.ldr") {
+            iso.seek(SeekFrom::Start(0x2454))?;
+            let mut buf = [0u8; 8];
+            iso.read_exact(&mut buf)?;
+            let apploader_code_size = u32::from_be_bytes(buf[0..4].try_into().unwrap());
+            let apploader_trailer_size = u32::from_be_bytes(buf[4..8].try_into().unwrap());
+            let size = align(apploader_code_size + apploader_trailer_size, 5) as usize;
+
+            let mut f = std::fs::File::options()
+                .create(true)
+                .write(true)
+                .open(out_path)?;
+            iso.seek(SeekFrom::Start(0x2440))?;
+            let mut portion = FilePortion { iso: &mut iso, size };
+            std::io::copy(&mut portion, &mut f)?;
+        }
+
+        if *iso_file_path == Path::new("Start.dol") {
+            iso.seek(SeekFrom::Start(dol_offset as _))?;
+            let mut buf = vec![0u8; (fst_offset-dol_offset) as usize];
+            iso.read_exact(&mut buf)?;
+
+            let mut size = 0usize;
+            for i in 0..18 {
+                let segment_offset = read_u32(&buf, i*4);
+                let segment_size = read_u32(&buf, 0x90 + i*4);
+                let seg_end = segment_offset+segment_size;
+                size = size.max(seg_end as usize);
+            }
+
+            std::fs::write(out_path, &buf[..size])?;
+        }
+    }
+
+    // read iso fs ------------------------------------------------------------
+
+    let string_table_offset_in_buf = string_table_offset - entry_start_offset; 
+    iso.seek(SeekFrom::Start(entry_start_offset as _))?;
+    let mut buf = vec![0u8; fs_size as usize];
+    iso.read_exact(&mut buf)?;
+
+    let mut dir_end_indices = Vec::with_capacity(8);
+    let mut offset = 0;
+    let mut entry_index = 1;
+
+    let mut string_table_end = 0;
+
+    let mut path = PathBuf::with_capacity(32);
+
+    while offset < string_table_offset_in_buf {
+        while Some(entry_index) == dir_end_indices.last().copied() {
+            // dir has ended
+            dir_end_indices.pop();
+            path.pop();
+        }
+
+        let is_file = buf[offset as usize] == 0;
+
+        let mut name_offset_buf = [0; 4];
+        name_offset_buf[1] = buf[offset as usize+1];
+        name_offset_buf[2] = buf[offset as usize+2];
+        name_offset_buf[3] = buf[offset as usize+3];
+        let name_offset = u32::from_be_bytes(name_offset_buf);
+        let name = read_filename(&buf, string_table_offset_in_buf + name_offset)
+            .ok_or(ReadISOFilesError::InvalidISO)?;
+
+        let string_len = name.len() as u32 + 1;
+        string_table_end = string_table_end.max(name_offset+string_len);
+
+        path.push(name);
+        if is_file {
+            let file_offset = read_u32(&buf, offset+4);
+            let file_size = read_u32(&buf, offset+8);
+
+            for (iso_file_path, out_path) in files {
+                if *iso_file_path == path.as_path() {
+                    if let Some(dirs) = out_path.ancestors().nth(1) {
+                        std::fs::create_dir_all(dirs)?;
+                    }
+                    let mut f = std::fs::File::options()
+                        .create(true)
+                        .write(true)
+                        .open(out_path)?;
+                    iso.seek(SeekFrom::Start(file_offset as _))?;
+                    let mut portion = FilePortion { iso: &mut iso, size: file_size as _ };
+                    std::io::copy(&mut portion, &mut f)?;
+                }
+            }
+            path.pop();
+        } else {
+            let next_idx = read_u32(&buf, offset+8);
+            dir_end_indices.push(next_idx);
+        }
+
+        offset += 0xC;
+        entry_index += 1;
+    }
+
+    Ok(())
 }
 
 /// Tries to do as little IO as possible. 

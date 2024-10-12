@@ -5,10 +5,12 @@ const HELP: &'static str =
        gc_fst rebuild <root path> [iso path]
        gc_fst set-header <ISO.hdr path | iso path> <game ID> [game title]
 
+       gc_fst read <iso path> [ <path in iso> <path to file> ] * n
+
        gc_fst fs <iso path> [
            insert <path in iso> <path to file>
            delete <path in iso>
-       ]*n";
+       ] * n";
 
 fn usage() -> ! {
     eprintln!("{}", HELP);
@@ -27,6 +29,34 @@ macro_rules! unwrap_usage {
 fn main() {
     let args = std::env::args().collect::<Vec<_>>();
     match args.get(1).map(|s| s.as_str()) {
+        Some("read") => {
+            let iso = unwrap_usage!(args.get(2).map(|s| s.as_str()));
+            let mut files = Vec::with_capacity(args[3..].len() / 2);
+
+            let mut i = 3;
+            while i < args.len() {
+                let iso_path = std::path::Path::new(&args[i]);
+                let read_path = std::path::Path::new(unwrap_usage!(args.get(i+1)));
+                files.push((iso_path, read_path));
+                i += 2;
+            }
+
+            match read_iso_files(std::path::Path::new(iso), &files) {
+                Ok(()) => {},
+                Err(ReadISOFilesError::IOError(e)) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                },
+                Err(ReadISOFilesError::InvalidISO) => {
+                    eprintln!("Error: file is not an iso or is corrupted");
+                    std::process::exit(1);
+                },
+                Err(ReadISOFilesError::InvalidFSPath(path)) => {
+                    eprintln!("Error: file path '{}' does not exist", path.display());
+                    std::process::exit(1);
+                }
+            }
+        }
         Some("fs") => {
             let iso = unwrap_usage!(args.get(2).map(|s| s.as_str()));
 
