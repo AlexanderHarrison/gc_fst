@@ -88,6 +88,10 @@ fn main() {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);
                 },
+                Err(OperateISOError::OpenError { path, e }) => {
+                    eprintln!("Error: could not open file '{}': {}", path.display(), e);
+                    std::process::exit(1);
+                },
                 Err(OperateISOError::FileInsertionReplicatesFolder(path)) => {
                     eprintln!("Error: insertion path '{}' already exists as a folder", path.display());
                     std::process::exit(1);

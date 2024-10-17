@@ -25,6 +25,7 @@ pub enum WriteISOError {
 #[derive(Debug)]
 pub enum OperateISOError {
     IOError(std::io::Error),
+    OpenError { path: PathBuf, e: std::io::Error },
     FileInsertionReplicatesFolder(PathBuf),
     InvalidISOPath(PathBuf),
     InvalidFSPath(PathBuf),
@@ -771,7 +772,8 @@ pub fn operate_on_iso(iso_path: &Path, ops: &[IsoOp]) -> Result<(), OperateISOEr
     let mut iso = std::fs::File::options()
         .read(true)
         .write(true)
-        .open(iso_path)?;
+        .open(iso_path)
+        .map_err(|e| OperateISOError::OpenError { path: iso_path.into(), e })?;
 
 
     // read header ---------------------------------------------------------
@@ -973,7 +975,8 @@ pub fn operate_on_iso(iso_path: &Path, ops: &[IsoOp]) -> Result<(), OperateISOEr
 
         let mut file = std::fs::File::options()
             .read(true)
-            .open(fs_path)?;
+            .open(fs_path)
+            .map_err(|e| OperateISOError::OpenError { path: fs_path.into(), e })?;
 
         std::io::copy(&mut file, &mut iso)?;
     }
@@ -1046,7 +1049,8 @@ pub fn operate_on_iso(iso_path: &Path, ops: &[IsoOp]) -> Result<(), OperateISOEr
 
         let mut f = std::fs::File::options()
             .read(true)
-            .open(iso_hdr)?;
+            .open(iso_hdr)
+            .map_err(|e| OperateISOError::OpenError { path: iso_hdr.into(), e })?;
         std::io::copy(&mut f, &mut iso)?;
     }
 
@@ -1065,7 +1069,8 @@ pub fn operate_on_iso(iso_path: &Path, ops: &[IsoOp]) -> Result<(), OperateISOEr
 
         let mut f = std::fs::File::options()
             .read(true)
-            .open(apploader)?;
+            .open(apploader)
+            .map_err(|e| OperateISOError::OpenError { path: apploader.into(), e })?;
         std::io::copy(&mut f, &mut iso)?;
     }
 
@@ -1074,7 +1079,8 @@ pub fn operate_on_iso(iso_path: &Path, ops: &[IsoOp]) -> Result<(), OperateISOEr
 
         let mut f = std::fs::File::options()
             .read(true)
-            .open(start_dol)?;
+            .open(start_dol)
+            .map_err(|e| OperateISOError::OpenError { path: start_dol.into(), e })?;
         std::io::copy(&mut f, &mut iso)?;
     }
 

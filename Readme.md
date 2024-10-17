@@ -16,12 +16,12 @@ Usage: gc_fst extract <iso path>
        gc_fst rebuild <root path> [iso path]
        gc_fst set-header <ISO.hdr path | iso path> <game ID> [game title]
 
-       gc_fst read <iso path> [
+       gc_fst read <iso path> [ <path in iso> <path to file> ] * n
 
        gc_fst fs <iso path> [
            insert <path in iso> <path to file>
            delete <path in iso>
-       ]*n
+       ] * n
 ```
 
 ## Limitations
