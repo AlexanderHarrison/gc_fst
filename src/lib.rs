@@ -250,6 +250,7 @@ pub fn write_iso(root: &Path) -> Result<Vec<u8>, WriteISOError> {
         &mut string_offset,
     )?;
     
+    // mex makes the iso smaller, so apparently that's alright.
     if iso.len() > ROM_SIZE as usize { return Err(WriteISOError::ISOTooLarge); }
     iso.resize(ROM_SIZE as usize, 0u8);
 
@@ -397,7 +398,8 @@ fn count_entries(path: &Path) -> Result<(u32, u32), WriteISOError> {
 }
 
 pub fn read_iso(iso: &[u8]) -> Result<(), ReadISOError> {
-    if iso.len() != ROM_SIZE as usize { return Err(ReadISOError::InvalidISO); }
+    // mex makes the iso smaller, so apparently that's alright.
+    if iso.len() > ROM_SIZE as usize { return Err(ReadISOError::InvalidISO); }
 
     let fst_offset = read_u32(iso, HEADER_INFO_OFFSET+4);
     let entry_count = read_u32(iso, fst_offset + 0x8);
@@ -744,7 +746,7 @@ pub fn operate_on_iso(iso_path: &Path, ops: &[IsoOp]) -> Result<(), OperateISOEr
     if ops.len() == 0 { return Ok(()) }
     let iso_meta = iso_path.metadata()?;
 
-    if iso_meta.len() != ROM_SIZE as _ { return Err(OperateISOError::InvalidISO); }
+    if iso_meta.len() > ROM_SIZE as _ { return Err(OperateISOError::InvalidISO); }
 
     let mut iso_file_deletions = Vec::new();
     let mut iso_file_insertions = Vec::new();
