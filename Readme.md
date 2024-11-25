@@ -15,9 +15,8 @@ and will not be inserted into the iso filesystem.
 Usage: gc_fst extract <iso path>
        gc_fst rebuild <root path> [iso path]
        gc_fst set-header <ISO.hdr path | iso path> <game ID> [game title]
-
        gc_fst read <iso path> [ <path in iso> <path to file> ] * n
-
+       gc_fst tree <iso path> [--size|-s] [--offset|-o] [--hex|-x] [--directories|-d] [--filename|-f]
        gc_fst fs <iso path> [
            insert <path in iso> <path to file>
            delete <path in iso>
