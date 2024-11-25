@@ -4,9 +4,8 @@ const HELP: &'static str =
 "Usage: gc_fst extract <iso path>
        gc_fst rebuild <root path> [iso path]
        gc_fst set-header <ISO.hdr path | iso path> <game ID> [game title]
-
        gc_fst read <iso path> [ <path in iso> <path to file> ] * n
-
+       gc_fst tree <iso path> [--size|-s] [--offset|-o] [--hex|-x] [--directories|-d] [--filename|-f]
        gc_fst fs <iso path> [
            insert <path in iso> <path to file>
            delete <path in iso>
@@ -29,6 +28,64 @@ macro_rules! unwrap_usage {
 fn main() {
     let args = std::env::args().collect::<Vec<_>>();
     match args.get(1).map(|s| s.as_str()) {
+        Some("tree") => {
+            let iso = unwrap_usage!(args.get(2).map(|s| s.as_str()));
+
+            let mut i = 3;
+            let mut options = TreeOptions {
+                print_directories  : false,
+                print_files        : true,
+                print_file_offsets : false,
+                print_file_sizes   : false,
+                print_full_paths   : true,
+                print_hex          : false,
+            };
+
+            while let Some(arg) = args.get(i) {
+                match arg.as_str() {
+                    "--directories" | "-d" => {
+                        options.print_directories = true;
+                        i += 1;
+                    }
+                    "--size" | "-s" => {
+                        options.print_file_sizes = true;
+                        i += 1;
+                    }
+                    "--hex" | "-x" => {
+                        options.print_hex = true;
+                        i += 1;
+                    }
+                    "--offset" | "-o" => {
+                        options.print_file_offsets = true;
+                        i += 1;
+                    }
+                    "--filename" | "-f" => {
+                        options.print_full_paths = false;
+                        i += 1;
+                    }
+                    _ => {
+                        eprintln!("Error: unknown argument '{}'\n\n{}", arg, HELP);
+                        std::process::exit(1);
+                    }
+                }
+            }
+
+            match tree_iso(std::path::Path::new(iso), &options) {
+                Ok(()) => {},
+                Err(TreeISOError::IOError(e)) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+                Err(TreeISOError::InvalidISO) => {
+                    eprintln!("Error: file is not an iso or is corrupted");
+                    std::process::exit(1);
+                },
+                Err(TreeISOError::OpenError { path, e }) => {
+                    eprintln!("Error: could not open file '{}': {}", path.display(), e);
+                    std::process::exit(1);
+                },
+            }
+        }
         Some("read") => {
             let iso = unwrap_usage!(args.get(2).map(|s| s.as_str()));
             let mut files = Vec::with_capacity(args[3..].len() / 2);

@@ -15,6 +15,13 @@ pub enum ReadISOError {
 }
 
 #[derive(Debug)]
+pub enum TreeISOError {
+    IOError(std::io::Error),
+    OpenError { path: PathBuf, e: std::io::Error },
+    InvalidISO,
+}
+
+#[derive(Debug)]
 pub enum WriteISOError {
     ISOTooLarge,
     InvalidFilename(std::ffi::OsString),
@@ -47,6 +54,10 @@ impl From<std::io::Error> for OperateISOError {
 
 impl From<std::io::Error> for ReadISOFilesError {
     fn from(e: std::io::Error) -> Self { ReadISOFilesError::IOError(e) }
+}
+
+impl From<std::io::Error> for TreeISOError {
+    fn from(e: std::io::Error) -> Self { TreeISOError::IOError(e) }
 }
 
 #[derive(Debug)]
@@ -726,6 +737,133 @@ pub fn read_iso_files(iso_path: &Path, files: &[(&Path, &Path)]) -> Result<(), R
             }
             path.pop();
         } else {
+            let next_idx = read_u32(&buf, offset+8);
+            dir_end_indices.push(next_idx);
+        }
+
+        offset += 0xC;
+        entry_index += 1;
+    }
+
+    Ok(())
+}
+
+#[derive(Debug)]
+pub struct TreeOptions {
+    pub print_directories: bool,
+    pub print_files: bool,
+    pub print_file_offsets: bool,
+    pub print_file_sizes: bool,
+    pub print_full_paths: bool,
+    pub print_hex: bool,
+}
+
+/// Prints the paths of every file on the ISO.
+pub fn tree_iso(
+    iso_path: &Path,
+    options: &TreeOptions,
+) -> Result<(), TreeISOError> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let iso_meta = iso_path.metadata()?;
+
+    if iso_meta.len() > ROM_SIZE as _ { return Err(TreeISOError::InvalidISO); }
+
+    let mut iso = std::fs::File::options()
+        .read(true)
+        .open(iso_path)
+        .map_err(|e| TreeISOError::OpenError { path: iso_path.into(), e })?;
+
+    // read header ---------------------------------------------------------
+
+    let mut buf = [0u8; 12];
+    iso.seek(SeekFrom::Start(HEADER_INFO_OFFSET as _))?;
+    iso.read_exact(&mut buf)?;
+    let fst_offset = u32::from_be_bytes(buf[4..8].try_into().unwrap());
+    let fs_size = u32::from_be_bytes(buf[8..12].try_into().unwrap());
+
+    let mut u32_buf = [0u8; 4];
+    iso.seek(SeekFrom::Start((fst_offset + 8) as _))?;
+    iso.read_exact(&mut u32_buf)?;
+    let entry_count = u32::from_be_bytes(u32_buf);
+
+    let string_table_offset = fst_offset + entry_count * 0xC;
+    let entry_start_offset = fst_offset + 0xC;
+
+    // read iso fs ------------------------------------------------------------
+
+    let string_table_offset_in_buf = string_table_offset - entry_start_offset; 
+    iso.seek(SeekFrom::Start(entry_start_offset as _))?;
+    let mut buf = vec![0u8; fs_size as usize];
+    iso.read_exact(&mut buf)?;
+
+    let mut dir_end_indices = Vec::with_capacity(8);
+    let mut offset = 0;
+    let mut entry_index = 1;
+    let mut path_in_iso = PathBuf::with_capacity(64);
+
+    while offset < string_table_offset_in_buf {
+        while Some(entry_index) == dir_end_indices.last().copied() {
+            // dir has ended
+            dir_end_indices.pop();
+            path_in_iso.pop();
+        }
+
+        let is_file = buf[offset as usize] == 0;
+
+        let mut name_offset_buf = [0; 4];
+        name_offset_buf[1] = buf[offset as usize+1];
+        name_offset_buf[2] = buf[offset as usize+2];
+        name_offset_buf[3] = buf[offset as usize+3];
+        let name_offset = u32::from_be_bytes(name_offset_buf);
+        let name = read_filename(&buf, string_table_offset_in_buf + name_offset)
+            .ok_or(TreeISOError::InvalidISO)?;
+
+        if is_file {
+            if options.print_files {
+                let file_offset = read_u32(&buf, offset+4);
+                let file_size = read_u32(&buf, offset+8);
+
+                if options.print_full_paths {
+                    path_in_iso.push(name);
+                    print!("{}", path_in_iso.display());
+                    path_in_iso.pop();
+                } else {
+                    print!("{}", name);
+                }
+
+                if options.print_file_offsets {
+                    if options.print_hex {
+                        print!("\t0x{:x}", file_offset);
+                    } else {
+                        print!("\t{}", file_offset);
+                    }
+                }
+
+                if options.print_file_sizes {
+                    if options.print_hex {
+                        print!("\t0x{:x}", file_size);
+                    } else {
+                        print!("\t{}", file_size);
+                    }
+                }
+
+                println!();
+            }
+        } else {
+            path_in_iso.push(name);
+
+            if options.print_directories {
+                print!("{:s<1$}", "", dir_end_indices.len() * 2);
+
+                if options.print_full_paths {
+                    println!("{}{}", path_in_iso.display(), std::path::MAIN_SEPARATOR);
+                } else {
+                    println!("{}{}", name, std::path::MAIN_SEPARATOR);
+                }
+            }
+
+            //let parent_idx = read_u32(&buf, offset+4); // unused
             let next_idx = read_u32(&buf, offset+8);
             dir_end_indices.push(next_idx);
         }
