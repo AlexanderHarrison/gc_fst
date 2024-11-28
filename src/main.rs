@@ -3,6 +3,7 @@ use gc_fst::*;
 const HELP: &'static str = 
 "Usage: gc_fst extract <iso path>
        gc_fst rebuild <root path> [iso path]
+       gc_fst get-header <ISO.hdr path | iso path>
        gc_fst set-header <ISO.hdr path | iso path> <game ID> [game title]
        gc_fst read <iso path> [ <path in iso> <path to file> ] * n
        gc_fst tree <iso path> [--size|-s] [--offset|-o] [--hex|-x] [--directories|-d] [--filename|-f]
@@ -171,6 +172,34 @@ fn main() {
                 }
                 Err(OperateISOError::ISOTooLarge) => {
                     eprintln!("Error: resulting ISO is too large, too many files added.");
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Some("get-header") => {
+            let path = unwrap_usage!(args.get(2).map(|s| s.as_str()));
+
+            let mut f = match std::fs::File::options().read(true).open(path) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("Error: Could not open file '{}'", e);
+                    std::process::exit(1);
+                }
+            };
+
+            let mut header = [0u8; 6];
+            use std::io::Read;
+            match f.read_exact(&mut header) {
+                Ok(()) => match std::str::from_utf8(&header) {
+                    Ok(str) => println!("{}", str),
+                    Err(e) => {
+                        eprintln!("Error: Could not parse header: {}", e);
+                        std::process::exit(1);
+                    }
+                },
+                Err(e) => {
+                    eprintln!("Error: Could not read header: {}", e);
                     std::process::exit(1);
                 }
             }
