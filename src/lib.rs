@@ -261,10 +261,12 @@ pub fn write_iso(root: &Path) -> Result<Vec<u8>, WriteISOError> {
         &mut string_offset,
     )?;
     
+    let iso_size = align(iso.len() as u32, 0x800); // align to 0x800 to match nkit.iso alignment
+    iso.resize(iso_size as usize, 0u8);
+    
     // mex makes the iso smaller, so apparently that's alright.
     if iso.len() > ROM_SIZE as usize { return Err(WriteISOError::ISOTooLarge); }
-    iso.resize(ROM_SIZE as usize, 0u8);
-
+    
     Ok(iso)
 }
 
