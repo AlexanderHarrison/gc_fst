@@ -1,7 +1,8 @@
 const HEADER_INFO_OFFSET: u32 = 0x420;
 const FILE_CONTENTS_ALIGNMENT: u32 = 11; // 2k - DVD sector size
 const SEGMENT_ALIGNMENT: u32 = 8;
-
+const ISO_ALIGNMENT: u32 = 11; // 2k - match nkit.iso alignment
+        
 pub const ROM_SIZE: u32 = 0x57058000;
 
 use std::path::{Path, PathBuf};
@@ -23,7 +24,6 @@ pub enum TreeISOError {
 
 #[derive(Debug)]
 pub enum WriteISOError {
-    ISOTooLarge,
     InvalidFilename(std::ffi::OsString),
     ReadFileError(std::io::Error),
     ReadDirError(std::io::Error),
@@ -38,7 +38,6 @@ pub enum OperateISOError {
     InvalidFSPath(PathBuf),
     InvalidISO,
     TOCTooLarge,
-    ISOTooLarge,
 }
 
 #[derive(Debug)]
@@ -255,7 +254,7 @@ pub fn write_iso(root: &Path) -> Result<Vec<u8>, WriteISOError> {
         &mut string_offset,
     )?;
     
-    let iso_size = align(iso.len() as u32, 0x800); // align to 0x800 to match nkit.iso alignment
+    let iso_size = align(iso.len() as u32, ISO_ALIGNMENT);
     iso.resize(iso_size as usize, 0u8);
     
     Ok(iso)
@@ -891,6 +890,9 @@ pub fn operate_on_iso(iso_path: &Path, ops: &[IsoOp]) -> Result<(), OperateISOEr
             }
         }
     }
+    
+    let iso_meta = iso_path.metadata()?;
+    let iso_size = iso_meta.len() as u32;
 
     let mut iso = std::fs::File::options()
         .read(true)
@@ -1046,11 +1048,12 @@ pub fn operate_on_iso(iso_path: &Path, ops: &[IsoOp]) -> Result<(), OperateISOEr
         }).collect::<Vec<_>>();
 
     let data_end_start = align(data_end, FILE_CONTENTS_ALIGNMENT);
-    if data_end_start < ROM_SIZE { free_space.push(data_end_start..ROM_SIZE) }
+    if data_end_start < iso_size { free_space.push(data_end_start..iso_size) }
 
     // insertions
 
     let mut write_locs = Vec::with_capacity(iso_file_insertions.len());
+    let mut iso_end = iso_size;
 
     for (iso_path, fs_path) in iso_file_insertions.iter() {
         let insert_idx = match iso_path.ancestors().nth(1) {
@@ -1075,10 +1078,15 @@ pub fn operate_on_iso(iso_path: &Path, ops: &[IsoOp]) -> Result<(), OperateISOEr
                 break;
             }
         }
-
+        
         let offset = match offset {
             Some(o) => o,
-            None => return Err(OperateISOError::ISOTooLarge),
+            None => {
+                // expand ISO
+                let offset = align(iso_end, FILE_CONTENTS_ALIGNMENT);
+                iso_end = offset + size;
+                offset
+            },
         };
 
         write_locs.push(offset);
@@ -1090,9 +1098,16 @@ pub fn operate_on_iso(iso_path: &Path, ops: &[IsoOp]) -> Result<(), OperateISOEr
     }
 
     // new fs was created and is valid, start writing ----------------------------
-
+    
+    // resize iso
+    
+    if iso_size < iso_end {
+        let new_iso_size = align(iso_end, ISO_ALIGNMENT);
+        iso.set_len(new_iso_size as _)?;
+    }
+    
     // write inserted files
-
+    
     for (offset, (_, fs_path)) in write_locs.into_iter().zip(iso_file_insertions) {
         iso.seek(SeekFrom::Start(offset as _))?;
 

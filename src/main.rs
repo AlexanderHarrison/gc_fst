@@ -170,10 +170,6 @@ fn main() {
                     eprintln!("Error: table of contents is too large, too many files added.");
                     std::process::exit(1);
                 }
-                Err(OperateISOError::ISOTooLarge) => {
-                    eprintln!("Error: resulting ISO is too large, too many files added.");
-                    std::process::exit(1);
-                }
             }
         }
 
@@ -294,10 +290,6 @@ fn main() {
 
             let bytes = match write_iso(std::path::Path::new(root_path)) {
                 Ok(b) => b,
-                Err(WriteISOError::ISOTooLarge) => {
-                    eprintln!("Error: Resulting ISO is too large");
-                    std::process::exit(1);
-                },
                 Err(WriteISOError::InvalidFilename(f)) => {
                     eprintln!("Error: Filename '{:?}' cannot be written in an ISO", f);
                     std::process::exit(1);
