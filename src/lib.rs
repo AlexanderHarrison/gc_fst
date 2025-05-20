@@ -258,9 +258,6 @@ pub fn write_iso(root: &Path) -> Result<Vec<u8>, WriteISOError> {
     let iso_size = align(iso.len() as u32, 0x800); // align to 0x800 to match nkit.iso alignment
     iso.resize(iso_size as usize, 0u8);
     
-    // mex makes the iso smaller, so apparently that's alright.
-    if iso.len() > ROM_SIZE as usize { return Err(WriteISOError::ISOTooLarge); }
-    
     Ok(iso)
 }
 
@@ -405,9 +402,6 @@ fn count_entries(path: &Path) -> Result<(u32, u32), WriteISOError> {
 }
 
 pub fn read_iso(iso: &[u8]) -> Result<(), ReadISOError> {
-    // mex makes the iso smaller, so apparently that's alright.
-    if iso.len() > ROM_SIZE as usize { return Err(ReadISOError::InvalidISO); }
-
     let fst_offset = read_u32(iso, HEADER_INFO_OFFSET+4);
     let entry_count = read_u32(iso, fst_offset + 0x8);
     let string_table_offset = fst_offset + entry_count * 0xC;
@@ -761,10 +755,6 @@ pub fn tree_iso(
 ) -> Result<(), TreeISOError> {
     use std::io::{Read, Seek, SeekFrom};
 
-    let iso_meta = iso_path.metadata()?;
-
-    if iso_meta.len() > ROM_SIZE as _ { return Err(TreeISOError::InvalidISO); }
-
     let mut iso = std::fs::File::options()
         .read(true)
         .open(iso_path)
@@ -878,9 +868,6 @@ pub fn operate_on_iso(iso_path: &Path, ops: &[IsoOp]) -> Result<(), OperateISOEr
     use std::io::{Read, Write, Seek, SeekFrom};
 
     if ops.len() == 0 { return Ok(()) }
-    let iso_meta = iso_path.metadata()?;
-
-    if iso_meta.len() > ROM_SIZE as _ { return Err(OperateISOError::InvalidISO); }
 
     let mut iso_file_deletions = Vec::new();
     let mut iso_file_insertions = Vec::new();
