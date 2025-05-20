@@ -60,12 +60,6 @@ impl From<std::io::Error> for TreeISOError {
     fn from(e: std::io::Error) -> Self { TreeISOError::IOError(e) }
 }
 
-#[derive(Debug)]
-#[cfg(feature = "png")]
-pub enum FromPngError {
-    DecodeError(lodepng::Error),
-}
-
 #[derive(Clone, Debug)]
 pub struct RGB5A1Image(pub Box<[u8; 0x1800]>);
 
