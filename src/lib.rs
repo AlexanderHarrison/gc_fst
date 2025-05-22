@@ -1,5 +1,5 @@
 const HEADER_INFO_OFFSET: u32 = 0x420;
-const FILE_CONTENTS_ALIGNMENT: u32 = 11; // 2k - DVD sector size
+const FILE_CONTENTS_ALIGNMENT: u32 = 15; // 32k
 const SEGMENT_ALIGNMENT: u32 = 8;
 const ISO_ALIGNMENT: u32 = 11; // 2k - match nkit.iso alignment
         
@@ -254,7 +254,8 @@ pub fn write_iso(root: &Path) -> Result<Vec<u8>, WriteISOError> {
         &mut string_offset,
     )?;
     
-    let iso_size = align(iso.len() as u32, ISO_ALIGNMENT);
+    let iso_size = align(iso.len() as u32, ISO_ALIGNMENT)
+        .max(ROM_SIZE);
     iso.resize(iso_size as usize, 0u8);
     
     Ok(iso)
@@ -1100,7 +1101,7 @@ pub fn operate_on_iso(iso_path: &Path, ops: &[IsoOp]) -> Result<(), OperateISOEr
     // new fs was created and is valid, start writing ----------------------------
     
     // resize iso
-    
+    iso_end = iso_end.max(ROM_SIZE);
     if iso_size < iso_end {
         let new_iso_size = align(iso_end, ISO_ALIGNMENT);
         iso.set_len(new_iso_size as _)?;
